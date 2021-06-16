@@ -150,27 +150,24 @@ JSONRPC_STATUS CAddonsOperations::SetAddonEnabled(const std::string &method, ITr
     return InvalidParams;
 
   bool disabled = false;
-  AddonDisabledReason disabledReason;
   if (parameterObject["enabled"].isBoolean())
   {
     disabled = !parameterObject["enabled"].asBoolean();
-    disabledReason =
-        static_cast<AddonDisabledReason>(parameterObject["disabledReason"].asInteger());
   }
   // we need to toggle the current disabled state of the addon
   else if (parameterObject["enabled"].isString())
   {
     disabled = !CServiceBroker::GetAddonMgr().IsAddonDisabled(id);
-    disabledReason =
-        static_cast<AddonDisabledReason>(parameterObject["disabledReason"].asInteger());
   }
   else
   {
     return InvalidParams;
   }
 
-  bool success = disabled ? CServiceBroker::GetAddonMgr().DisableAddon(id, disabledReason)
-                          : CServiceBroker::GetAddonMgr().EnableAddon(id);
+  bool success = disabled
+                     ? CServiceBroker::GetAddonMgr().DisableAddon(id, AddonDisabledReason::USER)
+                     : CServiceBroker::GetAddonMgr().EnableAddon(id);
+
   return success ? ACK : InvalidParams;
 }
 
@@ -210,9 +207,9 @@ JSONRPC_STATUS CAddonsOperations::ExecuteAddon(const std::string &method, ITrans
 
   std::string cmd;
   if (params.empty())
-    cmd = StringUtils::Format("RunAddon(%s)", id.c_str());
+    cmd = StringUtils::Format("RunAddon({})", id);
   else
-    cmd = StringUtils::Format("RunAddon(%s, %s)", id.c_str(), argv.c_str());
+    cmd = StringUtils::Format("RunAddon({}, {})", id, argv);
 
   if (params["wait"].asBoolean())
     CApplicationMessenger::GetInstance().SendMsg(TMSG_EXECUTE_BUILT_IN, -1, -1, nullptr, cmd);

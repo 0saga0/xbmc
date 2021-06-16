@@ -36,7 +36,7 @@ using namespace XFILE;
 
 void xb_smbc_log(const char* msg)
 {
-  CLog::Log(LOGINFO, "%s%s", "smb: ", msg);
+  CLog::Log(LOGINFO, "{}{}", "smb: ", msg);
 }
 
 void xb_smbc_auth(const char *srv, const char *shr, char *wg, int wglen,
@@ -255,7 +255,7 @@ std::string CSMB::URLEncode(const CURL &url)
 
   if (url.HasPort())
   {
-    flat += StringUtils::Format(":%i", url.GetPort());
+    flat += StringUtils::Format(":{}", url.GetPort());
   }
 
   /* okey sadly since a slash is an invalid name we have to tokenize */
@@ -355,6 +355,8 @@ int64_t CSMBFile::GetPosition()
   if (m_fd == -1)
     return -1;
   CSingleLock lock(smb);
+  if (!smb.IsSmbValid())
+    return -1;
   return smbc_lseek(m_fd, 0, SEEK_CUR);
 }
 
@@ -373,7 +375,7 @@ bool CSMBFile::Open(const CURL& url)
   // if a file matches the if below return false, it can't exist on a samba share.
   if (!IsValidFile(url.GetFileName()))
   {
-    CLog::Log(LOGINFO, "SMBFile->Open: Bad URL : '%s'", url.GetRedacted().c_str());
+    CLog::Log(LOGINFO, "SMBFile->Open: Bad URL : '{}'", url.GetRedacted());
     return false;
   }
   m_url = url;
@@ -385,15 +387,18 @@ bool CSMBFile::Open(const CURL& url)
   std::string strFileName;
   m_fd = OpenFile(url, strFileName);
 
-  CLog::Log(LOGDEBUG,"CSMBFile::Open - opened %s, fd=%d",url.GetRedacted().c_str(), m_fd);
+  CLog::Log(LOGDEBUG, "CSMBFile::Open - opened {}, fd={}", url.GetRedacted(), m_fd);
   if (m_fd == -1)
   {
     // write error to logfile
-    CLog::Log(LOGINFO, "SMBFile->Open: Unable to open file : '%s'\nunix_err:'%x' error : '%s'", CURL::GetRedacted(strFileName).c_str(), errno, strerror(errno));
+    CLog::Log(LOGINFO, "SMBFile->Open: Unable to open file : '{}'\nunix_err:'{:x}' error : '{}'",
+              CURL::GetRedacted(strFileName), errno, strerror(errno));
     return false;
   }
 
   CSingleLock lock(smb);
+  if (!smb.IsSmbValid())
+    return false;
   struct stat tmpBuffer;
   if (smbc_stat(strFileName.c_str(), &tmpBuffer) < 0)
   {
@@ -451,7 +456,8 @@ int CSMBFile::OpenFile(const CURL &url, std::string& strAuth)
 
   {
     CSingleLock lock(smb);
-    fd = smbc_open(strPath.c_str(), O_RDONLY, 0);
+    if (smb.IsSmbValid())
+      fd = smbc_open(strPath.c_str(), O_RDONLY, 0);
   }
 
   if (fd >= 0)
@@ -472,6 +478,8 @@ bool CSMBFile::Exists(const CURL& url)
   struct stat info;
 
   CSingleLock lock(smb);
+  if (!smb.IsSmbValid())
+    return false;
   int iResult = smbc_stat(strFileName.c_str(), &info);
 
   if (iResult < 0) return false;
@@ -483,9 +491,11 @@ int CSMBFile::Stat(struct __stat64* buffer)
   if (m_fd == -1)
     return -1;
 
-  struct stat tmpBuffer = {0};
+  struct stat tmpBuffer = {};
 
   CSingleLock lock(smb);
+  if (!smb.IsSmbValid())
+    return -1;
   int iResult = smbc_fstat(m_fd, &tmpBuffer);
   CUtil::StatToStat64(buffer, &tmpBuffer);
   return iResult;
@@ -497,7 +507,9 @@ int CSMBFile::Stat(const CURL& url, struct __stat64* buffer)
   std::string strFileName = GetAuthenticatedPath(CSMB::GetResolvedUrl(url));
   CSingleLock lock(smb);
 
-  struct stat tmpBuffer = {0};
+  if (!smb.IsSmbValid())
+    return -1;
+  struct stat tmpBuffer = {};
   int iResult = smbc_stat(strFileName.c_str(), &tmpBuffer);
   CUtil::StatToStat64(buffer, &tmpBuffer);
   return iResult;
@@ -518,7 +530,7 @@ int CSMBFile::Truncate(int64_t size)
   int iResult = smbc_ftruncate(m_fd, size);
 #endif
 */
-  CLog::Log(LOGWARNING, "%s - Warning(smbc_ftruncate called and not implemented)", __FUNCTION__);
+  CLog::Log(LOGWARNING, "{} - Warning(smbc_ftruncate called and not implemented)", __FUNCTION__);
   return 0;
 }
 
@@ -539,6 +551,8 @@ ssize_t CSMBFile::Read(void *lpBuf, size_t uiBufSize)
     return 0;
 
   CSingleLock lock(smb); // Init not called since it has to be "inited" by now
+  if (!smb.IsSmbValid())
+    return -1;
   smb.SetActivityTime();
 
   ssize_t bytesRead = smbc_read(m_fd, lpBuf, (int)uiBufSize);
@@ -562,12 +576,14 @@ int64_t CSMBFile::Seek(int64_t iFilePosition, int iWhence)
   if (m_fd == -1) return -1;
 
   CSingleLock lock(smb); // Init not called since it has to be "inited" by now
+  if (!smb.IsSmbValid())
+    return -1;
   smb.SetActivityTime();
   int64_t pos = smbc_lseek(m_fd, iFilePosition, iWhence);
 
   if ( pos < 0 )
   {
-    CLog::Log(LOGERROR, "%s - Error( %" PRId64", %d, %s )", __FUNCTION__, pos, errno, strerror(errno));
+    CLog::Log(LOGERROR, "{} - Error( {}, {}, {} )", __FUNCTION__, pos, errno, strerror(errno));
     return -1;
   }
 
@@ -578,8 +594,10 @@ void CSMBFile::Close()
 {
   if (m_fd != -1)
   {
-    CLog::Log(LOGDEBUG,"CSMBFile::Close closing fd %d", m_fd);
+    CLog::Log(LOGDEBUG, "CSMBFile::Close closing fd {}", m_fd);
     CSingleLock lock(smb);
+    if (!smb.IsSmbValid())
+      return;
     smbc_close(m_fd);
   }
   m_fd = -1;
@@ -591,6 +609,8 @@ ssize_t CSMBFile::Write(const void* lpBuf, size_t uiBufSize)
 
   // lpBuf can be safely casted to void* since xbmc_write will only read from it.
   CSingleLock lock(smb);
+  if (!smb.IsSmbValid())
+    return -1;
 
   return  smbc_write(m_fd, lpBuf, uiBufSize);
 }
@@ -601,11 +621,13 @@ bool CSMBFile::Delete(const CURL& url)
   std::string strFile = GetAuthenticatedPath(CSMB::GetResolvedUrl(url));
 
   CSingleLock lock(smb);
+  if (!smb.IsSmbValid())
+    return -1;
 
   int result = smbc_unlink(strFile.c_str());
 
   if(result != 0)
-    CLog::Log(LOGERROR, "%s - Error( %s )", __FUNCTION__, strerror(errno));
+    CLog::Log(LOGERROR, "{} - Error( {} )", __FUNCTION__, strerror(errno));
 
   return (result == 0);
 }
@@ -616,11 +638,13 @@ bool CSMBFile::Rename(const CURL& url, const CURL& urlnew)
   std::string strFile = GetAuthenticatedPath(CSMB::GetResolvedUrl(url));
   std::string strFileNew = GetAuthenticatedPath(CSMB::GetResolvedUrl(urlnew));
   CSingleLock lock(smb);
+  if (!smb.IsSmbValid())
+    return false;
 
   int result = smbc_rename(strFile.c_str(), strFileNew.c_str());
 
   if(result != 0)
-    CLog::Log(LOGERROR, "%s - Error( %s )", __FUNCTION__, strerror(errno));
+    CLog::Log(LOGERROR, "{} - Error( {} )", __FUNCTION__, strerror(errno));
 
   return (result == 0);
 }
@@ -637,10 +661,13 @@ bool CSMBFile::OpenForWrite(const CURL& url, bool bOverWrite)
 
   std::string strFileName = GetAuthenticatedPath(CSMB::GetResolvedUrl(url));
   CSingleLock lock(smb);
+  if (!smb.IsSmbValid())
+    return false;
 
   if (bOverWrite)
   {
-    CLog::Log(LOGWARNING, "SMBFile::OpenForWrite() called with overwriting enabled! - %s", CURL::GetRedacted(strFileName).c_str());
+    CLog::Log(LOGWARNING, "SMBFile::OpenForWrite() called with overwriting enabled! - {}",
+              CURL::GetRedacted(strFileName));
     m_fd = smbc_creat(strFileName.c_str(), 0);
   }
   else
@@ -651,7 +678,8 @@ bool CSMBFile::OpenForWrite(const CURL& url, bool bOverWrite)
   if (m_fd == -1)
   {
     // write error to logfile
-    CLog::Log(LOGERROR, "SMBFile->Open: Unable to open file : '%s'\nunix_err:'%x' error : '%s'", CURL::GetRedacted(strFileName).c_str(), errno, strerror(errno));
+    CLog::Log(LOGERROR, "SMBFile->Open: Unable to open file : '{}'\nunix_err:'{:x}' error : '{}'",
+              CURL::GetRedacted(strFileName), errno, strerror(errno));
     return false;
   }
 
